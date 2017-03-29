@@ -18,16 +18,50 @@ from mongolib import Mongo
 from esindex import ESIndex
 from essearch import ESSearch, TransportError
 import random
+from im.usersig import gen_sig
+import requests
 
 sys.path.append('/home/work/qcloudsms/demo/python')
 import Qcloud.Sms.SmsSender as SmsSender
 
 IMAGE_PATH = '/home/work/images/'
+APPID = 1400023423
 
 def get_conf(section, key):
     conf = ConfigParser.ConfigParser()
     conf.read('service.conf')
     return conf.get(section, key)
+
+def import_im(userid, name=None, icon=None):
+    url = 'https://console.tim.qq.com/v4/im_open_login_svc/account_import?usersig=eJxljk1PhDAURff8CsJWY9pCEUzcSCZaMxODgo4rUqCtjQN0Svmaif9dxUnE*Lbn3Hfv0bJt20nWTxe0KJquNpmZFHPsK9sBzvkvVEqWGTWZq8t-kI1KapZRbpieIcQYIwCWjixZbSSXJ4OWlazhgrflezaX-DzwvtLI9ZC7VKSY4WaVRiSOSPfSsjghu0jfSsD302vYHRLAByGepxwhL*226JFzX8dErN-wQzGKw10uIO3hAFZD3NzkgdgRuvX3dOOp8fKsr*L79HpRaWTFToOCwA9B*GdQz3Qrm3oWEIAYIhd8n2N9WJ-wR15k&sdkappid=1400023423&identifier=admin1&random=99999999&contenttype=json'
+    body = {}
+    body['Identifier'] = userid
+    if name is not None:
+        body['Nick'] = name
+    if icon is not None:
+        body['FaceUrl'] = icon
+    headers = {"Content-Type": "application/json"}
+    r = requests.post(url, data=json.dumps(body), headers = headers, verify=False)
+    msg = json.loads(r.text)
+    print 'import_im' ,msg
+    return msg['ErrorCode']
+
+def update_im(userid, name=None, icon=None):
+    url = 'https://console.tim.qq.com/v4/profile/portrait_set?usersig=eJxljk1PhDAURff8CsJWY9pCEUzcSCZaMxODgo4rUqCtjQN0Svmaif9dxUnE*Lbn3Hfv0bJt20nWTxe0KJquNpmZFHPsK9sBzvkvVEqWGTWZq8t-kI1KapZRbpieIcQYIwCWjixZbSSXJ4OWlazhgrflezaX-DzwvtLI9ZC7VKSY4WaVRiSOSPfSsjghu0jfSsD302vYHRLAByGepxwhL*226JFzX8dErN-wQzGKw10uIO3hAFZD3NzkgdgRuvX3dOOp8fKsr*L79HpRaWTFToOCwA9B*GdQz3Qrm3oWEIAYIhd8n2N9WJ-wR15k&identifier=admin1&sdkappid=1400023423&random=99999999&contenttype=json'
+    body = {}
+    body['From_Account'] = userid
+    items = []
+    if name is not None:
+        items.append({'Tag':'Tag_Profile_IM_Nick', 'Value':name})
+    if icon is not None:
+        items.append({'Tag':'Tag_Profile_IM_Image', 'Value':icon})
+    body['ProfileItem'] = items
+    headers = {"Content-Type": "application/json"}
+    print body
+    r = requests.post(url, data=json.dumps(body), headers = headers, verify=False)
+    msg = json.loads(r.text)
+    return msg['ErrorCode']
+
 
 
 @route('/')
@@ -264,18 +298,21 @@ def index():
     params['start_location_name'] = params['start_location_name'].decode('utf8')
     #params['end_location_name'] = params['end_location_name'].decode('utf8')
     params['task_detail'] = params['task_detail'].decode('utf8')
+
+    params['creater_userid'] = params['userid']
+    del params['userid']
         
     try:
         #check user,get user icon&username
         mongo = Mongo(db='mv', host='127.0.0.1', table='user')
-        key = {'userid':params['userid']}
+        key = {'userid':params['creater_userid']}
         mongo_res = mongo.find(filter_ = key)
         if mongo_res.count() == 0 or 'icon' not in mongo_res[0] or 'user_name' not in mongo_res[0]:
             ret['status'] = -3
             ret['msg'] =  'userid not register'
             return ret
-        params['icon'] = mongo_res[0]['icon']
-        params['user_name'] = mongo_res[0]['user_name']
+        params['creater_icon'] = mongo_res[0]['icon']
+        params['creater_username'] = mongo_res[0]['user_name']
 
         #task
         key = {'_id':params['task_id']}
@@ -286,21 +323,13 @@ def index():
         print mongo_ret
 
         ###province,city,area
-        key = {'_id':'{}_{}_{}'.format(params['province'], params['citycode'], params['adcode'])}
+        key = {'_id':'{}_{}_{}'.format(params['province'].encode('utf8'), params['citycode'], params['adcode'])}
+        #key = {'citycode':params['citycode'], 'adcode':params['adcode']}
         mongo = Mongo(db='mv', host='127.0.0.1', table='task_count')
-        mongo_res = mongo.find(filter_ = key)
-        if mongo_res.count() == 0:
-            values = {}
-            values['location'] = params['start_location']
-            values['province'] = params['province']
-            values['citycode'] = params['citycode']
-            values['adcode'] = params['adcode']
-            values['total'] = 1
-            value = {"$set": values}
-            mongo_ret = mongo.update(key, value)
-        else:
-            value = {"$inc": {"total":1}}
-            mongo_ret = mongo.update(key, value)
+        value = {"$inc": {"total":1}}
+        mongo_ret = mongo.update(key, value)
+        print mongo_ret
+
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
@@ -333,9 +362,12 @@ def index():
     args = ['task_id', 'userid', 'money', 'stop_time', 'task_detail', 'start_location', 'start_location_name', 'end_location', 'end_location_name', 'image_list']
     params = GetArgsPost(request, args)
 
+    params['creater_userid'] = params['userid']
+    del params['userid']
+ 
     params['task_status'] = 0
     params['publish_time'] = time.time()
-    key = {'_id':params['task_id'], 'userid':params['userid'], 'task_id':params['task_id']}
+    key = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
     value = {"$set": params}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
@@ -382,7 +414,10 @@ def index():
 
     params = GetArgsPost(request, args)
 
-    filter_ = {'_id':params['task_id'], 'userid':params['userid'], 'task_id':params['task_id']}
+    params['creater_userid'] = params['userid']
+    del params['userid']
+ 
+    filter_ = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
         mongo_ret = mongo.find(filter_ = filter_)
@@ -412,7 +447,10 @@ def index():
 
     params = GetArgsPost(request, args)
 
-    filter_ = {'_id':params['task_id'], 'userid':params['userid'], 'task_id':params['task_id']}
+    params['creater_userid'] = params['userid']
+    del params['userid']
+ 
+    filter_ = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
         if mongo.find(filter_ = filter_).count() == 0:
@@ -434,8 +472,8 @@ def index():
         print es_ret
 
     except TransportError as err:
-        ret['status']= err.status_code
-        ret['msg'] = err.error
+        #ret['status']= err.status_code
+        #ret['msg'] = err.error
         print traceback.format_exc()
 
 
@@ -454,30 +492,35 @@ def index():
 
     params = GetArgsPost(request, args)
 
+    params['accepter_userid'] = params['userid']
+    del params['userid']
+
     try:
-        filter_ = {'dest_userid':params['userid']}
+        #查询任务表，取出我接单的所有任务
+        filter_ = {'accepter_userid':params['accepter_userid']}
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
         mongo_ret = mongo.find(filter_ = filter_)
         tasks = []
 
-        u_key = {'userid':params['userid']}
+        #取出我的个人信息
+        u_key = {'userid':params['accepter_userid']}
         user_ret = mongo.find(filter_ = u_key, table='user')
-        src = {}
+        accepter = {}
         if user_ret.count() > 0:
-            src['userid'] = user_ret[0]['userid']
-            src['user_name'] = user_ret[0]['user_name']
-            src['icon'] = user_ret[0]['icon']
-
+            accepter['userid'] = user_ret[0]['userid']
+            accepter['user_name'] = user_ret[0]['user_name']
+            accepter['icon'] = user_ret[0]['icon']
+            #取出我接到的每个任务中，创建者的信息
             for t in mongo_ret:
-                u_key = {'userid':t['userid']}
-                user_ret = mongo.find(filter_ = u_key, table='user')
+                u_key = {'userid':t['creater_userid']}
+                creater_user_ret = mongo.find(filter_ = u_key, table='user')
                 if user_ret.count() > 0:
-                    t['dest_username'] = user_ret[0]['user_name']
-                    t['dest_usericon'] = user_ret[0]['icon']
-                    t['dest_userid'] = user_ret[0]['userid']
-                    t['user_id'] = src['userid']
-                    t['user_name'] = src['user_name']
-                    t['icon'] = src['icon']
+                    t['creater_username'] = creater_user_ret[0]['user_name']
+                    t['creater_usericon'] = creater_user_ret[0]['icon']
+                    t['creater_userid'] = creater_user_ret[0]['userid']
+                    t['accepter_userid'] = accepter['userid']
+                    t['accepter_username'] = accepter['user_name']
+                    t['accepter_usericon'] = accepter['icon']
 
                 t['status_txt'] = TASK_TXT[int(t['task_status'])]
                 tasks.append(t)
@@ -504,21 +547,23 @@ def index():
         return va
 
     params = GetArgsPost(request, args)
+    params['creater_userid'] = params['userid']
+    del params['userid']
 
     try:
-        filter_ = {'userid':params['userid']}
+        filter_ = {'creater_userid':params['creater_userid']}
         tasks = []
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
         mongo_ret = mongo.find(filter_ = filter_)
         for t in mongo_ret:
-            if 'dest_userid' in t:
-                u_key = {'userid':t['dest_userid']}
+            if 'accepter_userid' in t:
+                u_key = {'userid':t['accepter_userid']}
                 user_ret = mongo.find(filter_ = u_key, table='user')
                 if user_ret.count() > 0:
                     print type(user_ret[0])
                     print user_ret[0]
-                    t['dest_username'] = user_ret[0]['user_name']
-                    t['dest_usericon'] = user_ret[0]['icon']
+                    t['accepter_username'] = user_ret[0]['user_name']
+                    t['accepter_usericon'] = user_ret[0]['icon']
 
             t['status_txt'] = TASK_TXT[int(t['task_status'])]
             tasks.append(t)
@@ -543,8 +588,13 @@ def index():
         return va
 
     params = GetArgsPost(request, args)
+
+    params['accepter_userid'] = params['userid']
+    del params['userid']
+
+
     key = {'task_id':params['task_id']}
-    values = {'dest_userid': params['userid'], 'task_status':1}
+    values = {'accepter_userid': params['accepter_userid'], 'task_status':1}
     value = {"$set": values}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
@@ -561,8 +611,8 @@ def index():
         print es_ret
 
     except TransportError as err:
-        ret['status']= err.status_code
-        ret['msg'] = err.error
+        #ret['status']= err.status_code
+        #ret['msg'] = err.error
         print traceback.format_exc()
 
     return ret
@@ -579,8 +629,12 @@ def index():
         return va
 
     params = GetArgsPost(request, args)
-    key = {'task_id':params['task_id'], 'dest_userid':params['userid']}
-    values = {'dest_userid': params['userid'], 'task_status':2}
+
+    params['accepter_userid'] = params['userid']
+    del params['userid']
+
+    key = {'task_id':params['task_id'], 'accepter_userid':params['accepter_userid']}
+    values = {'accepter_userid': params['accepter_userid'], 'task_status':2}
     value = {"$set": values}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
@@ -605,6 +659,7 @@ def index():
     if va is not None:
         return va
 
+    params = GetArgsPost(request, args)
     key = {'task_id':params['task_id']}
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='task')
@@ -612,7 +667,9 @@ def index():
         if mongo_ret.count() > 0:
             s = mongo_ret[0]
             s['status_txt'] = TASK_TXT[int(s['task_status'])]
-            ret['results'] = json.dumps(s)
+            #ret['results'] = {'task_status':s['task_status'], 'status_txt':s['status_txt']}
+            ret['results'] = s
+            #ret['status'] = s['task_status']
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
@@ -646,7 +703,7 @@ def index():
                         results[r['province']] = {}
                         results[r['province']]['province'] = r['province']
                         results[r['province']]['total'] = r['total']
-                        results[r['province']]['location'] = r['location']
+                        results[r['province']]['location'] = r['p_center']
                     else:
                         results[r['province']]['total'] += r['total']
                 ret['results'] = results.values()
@@ -659,7 +716,7 @@ def index():
                         results[r['citycode']] = {}
                         results[r['citycode']]['citycode'] = r['citycode']
                         results[r['citycode']]['total'] = r['total']
-                        results[r['citycode']]['location'] = r['location']
+                        results[r['citycode']]['location'] = r['c_center']
                     else:
                         results[r['citycode']]['total'] += r['total']
                 ret['results'] = results.values()
@@ -673,11 +730,35 @@ def index():
                         results[r['adcode']] = {}
                         results[r['adcode']]['adcode'] = r['adcode']
                         results[r['adcode']]['total'] = r['total']
-                        results[r['adcode']]['location'] = r['location']
+                        results[r['adcode']]['location'] = r['d_center']
                     else:
                         results[r['adcode']]['total'] += r['total']
                 ret['results'] = results.values()
- 
+
+        elif params['zoomLevel'] == '3':    
+                es = ESSearch('127.0.0.1:9200')
+                index = '20170107'
+                doc_type = 'mv'
+                location = params['location']
+                radius = 3
+                start = 0
+                to = 10
+                aggs = es.search(index, doc_type, location, radius, 0, start=start, size=to-start, agg=True)
+                #print aggs
+                rets = []
+                for key in aggs:
+                    buckets = aggs[key]['buckets']
+                    for bucket in buckets:
+                        item = {}
+                        item['areacode'] = bucket['key']
+                        item['total'] = bucket['doc_count']
+                        lat = (bucket['cell']['bounds']['top_left']['lat'] + bucket['cell']['bounds']['bottom_right']['lat'])/2
+                        lon = (bucket['cell']['bounds']['top_left']['lon'] + bucket['cell']['bounds']['bottom_right']['lon'])/2
+                        item['location'] = '{},{}'.format(lat,lon)
+                        rets.append(item)
+                ret['results'] = rets
+            
+
     except TransportError as err:
         ret['status']= err.status_code
         ret['msg'] = err.error
@@ -807,13 +888,16 @@ def index():
             valueDict['device_id'] = params['device_id']
             value = {"$set": valueDict}
             mongo.update(key, value)
-            ret['results'] = {'userid':userid, 'iscomplete':0}
+            sig = gen_sig(userid, APPID)
+            ret['results'] = {'userid':userid, 'iscomplete':0, 'usersig':sig}
         else:
             complete = 1
             print mongo_res[0]
             if 'identity_id' not in mongo_res[0] or 'icon' not in mongo_res[0] or 'card' not in mongo_res[0]:
                 complete = 0
-            ret['results'] = {'userid': mongo_res[0]['userid'], 'iscomplete':complete}
+            userid = mongo_res[0]['userid']
+            sig = gen_sig(userid, APPID)
+            ret['results'] = {'userid': userid, 'iscomplete':complete, 'usersig':sig}
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
@@ -896,6 +980,10 @@ def index():
         mongo = Mongo(db='mv', host='127.0.0.1', table='user')
         mongo_ret = mongo.update(key, value)
 
+        sig = gen_sig(params['userid'], APPID)
+
+        ret['usersig'] = sig
+
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
@@ -926,12 +1014,46 @@ def index():
         mongo = Mongo(db='mv', host='127.0.0.1', table='user')
         mongo_ret = mongo.update(key, value)
 
+        import_im(params['userid'], name=params['user_name'], icon=params['icon'])
+
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
         ret.pop('results', None)
         print traceback.format_exc()
 
+    return ret
+
+
+@route('/get_userid_by_tel', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    verify_args = ['tel']
+    va = VerifyArgsPost(request, verify_args)
+    if va is not None:
+        return va
+
+    args = ['tel']
+    params = GetArgsPost(request, args)
+    try:
+        key = {'tel':params['tel']}
+        mongo = Mongo(db='mv', host='127.0.0.1', table='user')
+        mongo_ret = mongo.find(filter_ = key)
+        if mongo_ret.count() != 0:
+            detail = {}
+            needs = ['userid', 'name', 'icon']
+            for n in needs:
+                if n in mongo_ret[0]:
+                    detail[n] = mongo_ret[0][n]
+            ret['results'] = detail
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'read db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
     return ret
     
 @route('/get_personal', method='POST')
@@ -968,7 +1090,7 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['userid', 'task_id', 'dest_userid','content', 'comment_time', 'parent_id']
+    args = ['userid', 'task_id', 'accepter_userid','content', 'comment_time', 'parent_id']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
@@ -976,7 +1098,7 @@ def index():
     params = GetArgsPost(request, args)
     try:
         md = md5.new()
-        md.update(params['userid']+params['task_id']+params['dest_userid']+params['parent_id']+params['comment_time'])
+        md.update(params['userid']+params['task_id']+params['accepter_userid']+params['parent_id']+params['comment_time'])
         comment_id = md.hexdigest()
         params['comment_id'] = comment_id
 
@@ -1032,7 +1154,7 @@ def index():
     params = GetArgsPost(request, args)
     try:
 
-        key = {'task_id':params['task_id'], 'parent_id':'-1', 'dest_userid':'-1'}
+        key = {'task_id':params['task_id'], 'parent_id':'-1', 'accepter_userid':'-1'}
  
         mongo = Mongo(db='mv', host='127.0.0.1', table='comment')
         mongo_ret = mongo.find(filter_ = key)
@@ -1055,11 +1177,11 @@ def index():
                 if user_ret.count() > 0:
                     s['user_name'] = user_ret[0]['user_name']
                     s['user_icon'] = user_ret[0]['icon']
-                u_key = {'userid':s['dest_userid']}
+                u_key = {'userid':s['accepter_userid']}
                 user_ret = mongo.find(filter_ = u_key, table='user')
                 if user_ret.count() > 0:
-                    s['dest_user_name'] = user_ret[0]['user_name']
-                    s['dest_user_icon'] = user_ret[0]['icon']
+                    s['accepter_username'] = user_ret[0]['user_name']
+                    s['accepter_usericon'] = user_ret[0]['icon']
                 #sub_comment.append(s)
                 comments.append(s)
             #comments.append(sub_comment)
