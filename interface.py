@@ -275,7 +275,7 @@ def index():
 """
 #task interface
 """
-TASK_TXT = ['暂未接单', '接单,目前正在执行中', '已完成,等待确认付款', '已付款,等待评论', '对方已评价,等待你的评价']
+TASK_TXT = ['暂未接单', '接单,目前正在执行中', '已完成,等待确认付款', '已付款,等待评论', '对方已评价,等待你的评价','已发布,未付款','任务超时取消']
 
 @route('/create_task', method='POST')
 def index():
@@ -294,7 +294,9 @@ def index():
     params = GetArgsPost(request, args)
     params['publish_time'] = time.time()
     params['task_id'] = "{}_{}".format(params['userid'], params['publish_time'])
-    params['task_status'] = 0
+    #params['task_status'] = 0
+    #已发布,未付款
+    params['task_status'] = 5
     params['start_location_name'] = params['start_location_name'].decode('utf8')
     #params['end_location_name'] = params['end_location_name'].decode('utf8')
     params['task_detail'] = params['task_detail'].decode('utf8')
@@ -1090,7 +1092,7 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['userid', 'task_id', 'accepter_userid','content', 'comment_time', 'parent_id']
+    args = ['userid', 'task_id', 'dest_userid','content', 'comment_time', 'parent_id']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
@@ -1098,7 +1100,7 @@ def index():
     params = GetArgsPost(request, args)
     try:
         md = md5.new()
-        md.update(params['userid']+params['task_id']+params['accepter_userid']+params['parent_id']+params['comment_time'])
+        md.update(params['userid']+params['task_id']+params['dest_userid']+params['parent_id']+params['comment_time'])
         comment_id = md.hexdigest()
         params['comment_id'] = comment_id
 
@@ -1154,7 +1156,7 @@ def index():
     params = GetArgsPost(request, args)
     try:
 
-        key = {'task_id':params['task_id'], 'parent_id':'-1', 'accepter_userid':'-1'}
+        key = {'task_id':params['task_id'], 'parent_id':'-1', 'dest_userid':'-1'}
  
         mongo = Mongo(db='mv', host='127.0.0.1', table='comment')
         mongo_ret = mongo.find(filter_ = key)
@@ -1177,16 +1179,38 @@ def index():
                 if user_ret.count() > 0:
                     s['user_name'] = user_ret[0]['user_name']
                     s['user_icon'] = user_ret[0]['icon']
-                u_key = {'userid':s['accepter_userid']}
+                u_key = {'userid':s['dest_userid']}
                 user_ret = mongo.find(filter_ = u_key, table='user')
                 if user_ret.count() > 0:
-                    s['accepter_username'] = user_ret[0]['user_name']
-                    s['accepter_usericon'] = user_ret[0]['icon']
+                    s['dest_user_name'] = user_ret[0]['user_name']
+                    s['dest_user_icon'] = user_ret[0]['icon']
                 #sub_comment.append(s)
                 comments.append(s)
             #comments.append(sub_comment)
         ret['results'] = comments
         print comments
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
+
+    return ret
+ 
+
+@route('/pay_task', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['userid', 'comment_id']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    try:
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
