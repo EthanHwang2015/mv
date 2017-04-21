@@ -21,11 +21,15 @@ import random
 from im.usersig import gen_sig
 import requests
 
+from task import *
+
 sys.path.append('/home/work/qcloudsms/demo/python')
 import Qcloud.Sms.SmsSender as SmsSender
 
 IMAGE_PATH = '/home/work/images/'
 APPID = 1400023423
+
+TASK_TXT = ['暂未接单', '接单,目前正在执行中', '已完成,等待确认付款', '已付款,等待评论', '对方已评价,等待你的评价','已发布,未付款','任务超时取消','任务手动取消','任务已删除']
 
 def get_conf(section, key):
     conf = ConfigParser.ConfigParser()
@@ -275,7 +279,6 @@ def index():
 """
 #task interface
 """
-TASK_TXT = ['暂未接单', '接单,目前正在执行中', '已完成,等待确认付款', '已付款,等待评论', '对方已评价,等待你的评价','已发布,未付款','任务超时取消']
 
 @route('/create_task', method='POST')
 def index():
@@ -350,6 +353,63 @@ def index():
 
     return ret
 
+#cancel_task之后调用
+@route('/repost_task', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    verify_args = ['task_id','userid']
+    va = VerifyArgsPost(request, verify_args)
+    if va is not None:
+        return va
+
+    args = ['task_id', 'userid', 'money', 'stop_time', 'task_detail', 'start_location', 'start_location_name', 'end_location', 'end_location_name', 'image_list']
+    params = GetArgsPost(request, args)
+
+    params['creater_userid'] = params['userid']
+    del params['userid']
+ 
+    #等待接单
+    params['task_status'] = 0
+    params['publish_time'] = time.time()
+    key = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
+    value = {"$set": params}
+    try:
+        mongo = Mongo(db='mv', host='127.0.0.1', table='task')
+        if mongo.find(filter_ = key).count() == 0:
+            ret['status'] = -2
+            ret['msg'] = 'task not belong to this user'
+            return ret
+
+        mongo_ret = mongo.update(key, value)
+        print mongo_ret
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        print traceback.format_exc()
+
+    try:
+        
+        filter_ = {'task_id':params['task_id']}
+        mongo_ret = mongo.find(filter_ = filter_)
+        for t in mongo_ret:
+            es = ESIndex('127.0.0.1:9200', '20170107', 'mv')
+            t.pop('_id', None)
+            print json.dumps(t)
+            es_ret = es.Index(params['task_id'], json.dumps(t))
+            print es_ret
+            break
+    except TransportError as err:
+        ret['status']= err.status_code
+        ret['msg'] = err.error
+        print traceback.format_exc()
+
+    return ret
+
+
+
 @route('/update_task', method='POST')
 def index():
     ret = {}
@@ -367,7 +427,8 @@ def index():
     params['creater_userid'] = params['userid']
     del params['userid']
  
-    params['task_status'] = 0
+    #已发布,未付款
+    params['task_status'] = 5
     params['publish_time'] = time.time()
     key = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
     value = {"$set": params}
@@ -435,7 +496,54 @@ def index():
 
     return ret
 
-    
+@route('/cancel_task', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['userid', 'task_id']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+
+    params['creater_userid'] = params['userid']
+    del params['userid']
+ 
+    filter_ = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
+    try:
+        mongo = Mongo(db='mv', host='127.0.0.1', table='task')
+        if mongo.find(filter_ = filter_).count() == 0:
+            ret['status'] = -2
+            ret['msg'] = 'task not belong to this user'
+            return ret
+
+        key = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
+        #'任务手动取消'
+        params['task_status'] = 7
+        value = {"$set": params}
+        mongo_ret = mongo.update(key, value)
+        print mongo_ret
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        print traceback.format_exc()
+
+    try:
+        es = ESIndex('127.0.0.1:9200', '20170107', 'mv')
+        es_ret = es.delete(params['task_id'])
+        print es_ret
+
+    except TransportError as err:
+        #ret['status']= err.status_code
+        #ret['msg'] = err.error
+        print traceback.format_exc()
+
+    return ret
+
+
 @route('/delete_task', method='POST')
 def index():
     ret = {}
@@ -460,8 +568,11 @@ def index():
             ret['msg'] = 'task not belong to this user'
             return ret
 
-
-        mongo_ret = mongo.delete(filter_ = filter_)
+        key = {'_id':params['task_id'], 'creater_userid':params['creater_userid'], 'task_id':params['task_id']}
+        #'任务已删除'
+        params['task_status'] = 8
+        value = {"$set": params}
+        mongo_ret = mongo.update(key, value)
         print mongo_ret
     except:
         ret['status'] = -1
@@ -477,7 +588,6 @@ def index():
         #ret['status']= err.status_code
         #ret['msg'] = err.error
         print traceback.format_exc()
-
 
     return ret
 
@@ -678,6 +788,52 @@ def index():
         print traceback.format_exc()
 
     return ret
+
+@route('/pay_task', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['userid', 'comment_id']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    try:
+        pass
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
+
+    return ret
+ 
+
+@route('/trade_history', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['userid', 'comment_id']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    try:
+        pass
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
+
+    return ret
+ 
 
 
 @route('/search_task_count', method='POST')
@@ -1198,27 +1354,6 @@ def index():
     return ret
  
 
-@route('/pay_task', method='POST')
-def index():
-    ret = {}
-    ret['status'] = 0
-    ret['msg'] = 'ok'
-
-    args = ['userid', 'comment_id']
-    va = VerifyArgsPost(request, args)
-    if va is not None:
-        return va
-
-    params = GetArgsPost(request, args)
-    try:
-    except:
-        ret['status'] = -1
-        ret['msg'] = 'write db failed'
-        ret.pop('results', None)
-        print traceback.format_exc()
-
-    return ret
- 
 
 @route('/delete_comment', method='POST')
 def index():
