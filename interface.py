@@ -334,6 +334,7 @@ def index():
         value = {"$inc": {"total":1}}
         mongo_ret = mongo.update(key, value)
         print mongo_ret
+        ret['results'] = {'task_id':params['task_id']}
 
     except:
         ret['status'] = -1
@@ -760,6 +761,52 @@ def index():
 
     return ret
 
+@route('/set_task_status', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['task_id', 'task_status']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    key = {'task_id':params['task_id']}
+    value = {"$set": {'task_status':params['task_status']}}
+    try:
+        mongo = Mongo(db='mv', host='127.0.0.1', table='task')
+        mongo_ret = mongo.update(key, value)
+        print mongo_ret
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        print traceback.format_exc()
+
+    try:
+        
+        filter_ = {'task_id':params['task_id']}
+        mongo_ret = mongo.find(filter_ = filter_)
+        for t in mongo_ret:
+            es = ESIndex('127.0.0.1:9200', '20170107', 'mv')
+            t.pop('_id', None)
+            t['task_status'] = params['task_status']
+            print json.dumps(t)
+            es_ret = es.Index(params['task_id'], json.dumps(t))
+            print es_ret
+            break
+    except TransportError as err:
+        ret['status']= err.status_code
+        ret['msg'] = err.error
+        print traceback.format_exc()
+
+
+
+    return ret
+
+
+
 @route('/task_status', method='POST')
 def index():
     ret = {}
@@ -789,26 +836,100 @@ def index():
 
     return ret
 
-@route('/pay_task', method='POST')
+@route('/recv_notify', method='POST')
+def index():
+    print request.forms
+    return 'success'
+
+
+@route('/recharge', method='POST')
 def index():
     ret = {}
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['userid', 'comment_id']
+    args = ['userid', 'money']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
 
     params = GetArgsPost(request, args)
+ 
     try:
-        pass
+        key = {'userid':params['userid'], '_id':params['userid']}
+        value = {"$set": params}
+        mongo = Mongo(db='mv', host='127.0.0.1', table='account')
+
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
         ret.pop('results', None)
         print traceback.format_exc()
 
+    return ret
+
+@route('/balance', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['userid']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+ 
+    try:
+        key = {'userid':params['userid']}
+        mongo = Mongo(db='mv', host='127.0.0.1', table='account')
+        mongo_ret = mongo.find(filter_ = key)
+        if mongo_ret.count() > 0:
+            money = mongo_ret[0]
+            ret['results'] = {'money':money}
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
+
+    return ret
+
+#trade 
+@route('/pay_task', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    #pay_type:0=余额, 1=支付宝, 2＝微信
+    args = ['userid', 'task_id', 'pay_type', 'money']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    try:
+        create_tm = time.time()
+        md = md5.new()
+        md.update('{}_{}_{}'.format(userid, task_id, create_tm))
+        trade_no = '{}#{}'.format(userid, md.hexdigest())
+
+        key = {'userid':params['userid'], '_id':params['userid']}
+        value = {"$set": params}
+        mongo = Mongo(db='mv', host='127.0.0.1', table='trade')
+
+        results = {}
+        results['trade_no'] = trade_no
+        results['notify_url'] = 'http://115.28.25.154:9090/recv_notify'
+        ret['results'] = results
+
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
     return ret
  
 
