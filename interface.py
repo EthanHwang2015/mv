@@ -21,6 +21,10 @@ import random
 from im.usersig import gen_sig
 import requests
 
+#sys.path.append('/home/work/tools/alipay')
+from alipay import AliPay
+
+
 from task import *
 
 sys.path.append('/home/work/qcloudsms/demo/python')
@@ -899,6 +903,8 @@ def index():
 #trade 
 @route('/pay_task', method='POST')
 def index():
+    #支付宝appid 2017042106858692
+    ALIPAY_APPID = '2017042106858692'
     ret = {}
     ret['status'] = 0
     ret['msg'] = 'ok'
@@ -911,6 +917,8 @@ def index():
 
     params = GetArgsPost(request, args)
     try:
+        userid = params['userid']
+        task_id = params['task_id']
         create_tm = time.time()
         md = md5.new()
         md.update('{}_{}_{}'.format(userid, task_id, create_tm))
@@ -922,7 +930,23 @@ def index():
 
         results = {}
         results['trade_no'] = trade_no
-        results['notify_url'] = 'http://115.28.25.154:9090/recv_notify'
+        #results['notify_url'] = 'http://115.28.25.154:9090/recv_notify'
+
+        alipay = AliPay(
+            appid=ALIPAY_APPID,
+            app_notify_url='http://115.28.25.154:9090/recv_notify', 
+            app_private_key_path='/home/work/webserver/app_private_key.pem',
+            alipay_public_key_path="",  # alipay public key file path, do not put your public key file here
+            sign_type="RSA2", # RSA or RSA2
+            debug=False  # False by default
+        ) 
+        order_string = alipay.api_alipay_trade_app_pay(
+            out_trade_no = trade_no,
+            total_amount = params['money'],
+            subject = trade_no
+        )
+
+        results['orderinfo'] = order_string
         ret['results'] = results
 
     except:
@@ -1100,7 +1124,7 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['tel']
+    args = ['tel', 'smstype']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
@@ -1108,10 +1132,13 @@ def index():
     params = GetArgsPost(request, args)
 
     idfcode = random.randint(1000, 9999)
+    smstype = params['smstype']
 
     key = {'tel':params['tel']}
     params['idfcode'] = idfcode
     value = {"$set": params}
+    print value
+
     try:
         mongo = Mongo(db='mv', host='127.0.0.1', table='idfcode')
         mongo_ret = mongo.update(key, value)
@@ -1123,8 +1150,42 @@ def index():
 
     #ret['results'] = {'idfcode':idfcode}
     if ret['status'] == 0:
+        if '1' == smstype:
+            print 'smstype is 1'
+        else:
+            print 'smstype is not 1'
+
         rsp = send_idf(params['tel'], str(idfcode))
         print rsp
+    return ret
+
+
+@route('/bindweixin', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    args = ['tel', 'weixin']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+
+    key = {'tel':params['tel']}
+    value = {"$set": params}
+    print value
+
+    try:
+        mongo = Mongo(db='mv', host='127.0.0.1', table='weixin')
+        mongo_ret = mongo.update(key, value)
+        print mongo_ret
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        print traceback.format_exc()
+
     return ret
 
 
