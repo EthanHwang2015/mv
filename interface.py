@@ -20,11 +20,6 @@ from essearch import ESSearch, TransportError
 import random
 from im.usersig import gen_sig
 import requests
-
-#sys.path.append('/home/work/tools/alipay')
-from alipay import AliPay
-
-
 from task import *
 
 sys.path.append('/home/work/qcloudsms/demo/python')
@@ -842,8 +837,8 @@ def index():
 
 @route('/recv_notify', method='POST')
 def index():
-    print request.forms
-    return 'success'
+    print request.query
+    #return 'success'
 
 
 @route('/recharge', method='POST')
@@ -900,16 +895,18 @@ def index():
 
     return ret
 
+sys.path.append('/home/work/tools/alipay')
+sys.path.append('/home/work/tools/wxpay')
+
 #trade 
 @route('/pay_task', method='POST')
 def index():
-    #支付宝appid 2017042106858692
-    ALIPAY_APPID = '2017042106858692'
     ret = {}
     ret['status'] = 0
     ret['msg'] = 'ok'
 
     #pay_type:0=余额, 1=支付宝, 2＝微信
+    #args = ['userid', 'task_id', 'wx_openid', 'pay_type', 'money']
     args = ['userid', 'task_id', 'pay_type', 'money']
     va = VerifyArgsPost(request, args)
     if va is not None:
@@ -919,10 +916,14 @@ def index():
     try:
         userid = params['userid']
         task_id = params['task_id']
+        #wx_openid = params['wx_openid']
+        pay_type = params['pay_type']
+        money = params['money']
+
         create_tm = time.time()
         md = md5.new()
         md.update('{}_{}_{}'.format(userid, task_id, create_tm))
-        trade_no = '{}#{}'.format(userid, md.hexdigest())
+        trade_no = md.hexdigest()
 
         key = {'userid':params['userid'], '_id':params['userid']}
         value = {"$set": params}
@@ -932,21 +933,74 @@ def index():
         results['trade_no'] = trade_no
         #results['notify_url'] = 'http://115.28.25.154:9090/recv_notify'
 
-        alipay = AliPay(
-            appid=ALIPAY_APPID,
-            app_notify_url='http://115.28.25.154:9090/recv_notify', 
-            app_private_key_path='/home/work/webserver/app_private_key.pem',
-            alipay_public_key_path="",  # alipay public key file path, do not put your public key file here
-            sign_type="RSA2", # RSA or RSA2
-            debug=False  # False by default
-        ) 
-        order_string = alipay.api_alipay_trade_app_pay(
-            out_trade_no = trade_no,
-            total_amount = params['money'],
-            subject = trade_no
-        )
+        # 余额支付
+        if "0" == pay_type:
+            print pay_type
+        # 支付宝
+        elif "1" == pay_type:
+            from alipay import AliPay
 
-        results['orderinfo'] = order_string
+            #支付宝appid 2017042106858692
+            ALIPAY_APPID = '2017042106858692'
+            alipay = AliPay(
+                appid = ALIPAY_APPID,
+                app_notify_url = 'http://115.28.25.154:9090/recv_notify',
+                app_private_key_path = '/home/work/webserver/app_private_key.pem',
+                alipay_public_key_path = "",  # alipay public key file path, do not put your public key file here
+                sign_type = "RSA2", # RSA or RSA2
+                debug = True # False by default
+            )
+            subject = u"测试订单".encode("utf8")
+            #order_string = alipay.api_alipay_trade_app_pay(
+            #    out_trade_no = trade_no,
+            #    total_amount = '%.2f'%float(params['money']),
+            #    subject = trade_no
+            #)
+            order_string = alipay.api_alipay_trade_app_pay(
+                out_trade_no = trade_no,
+                total_amount = "0.01",
+                subject = subject
+            )
+            results['orderinfo'] = order_string
+
+        # 微信
+        elif "2" == pay_type:
+            #from wechat_sdk import WechatConf
+            #from wechat_sdk import WechatBasic
+            #微信appid wxc1779180c0ad0f29
+            from wx_pay import WxPay, WxPayError
+
+            WEIXIN_APPID = 'wxc1779180c0ad0f29'
+            WEIXIN_MCHID = '1483540042'
+            WEIXIN_MCHKEY = 'SY502489E90A00D2B6F9A783CAF332CC'
+            #conf = WechatConf(
+            #    token = 'your_token',
+            #    appid = WEIXIN_APPID,
+            #    appsecret = WEIXIN_APPSECRET,
+            #    encrypt_mode = 'safe',# 可选项：normal/compatible/safe，分别对应于：明文/兼容/安全模式
+            #    encoding_aes_key = 'your_encoding_aes_key'  # 如果传入此值则必须保证同时传入 token, appid
+            #)
+            #wechat = WechatBasic(conf=conf)
+            wxpay = WxPay(
+                wx_app_id = WEIXIN_APPID,  # 微信平台appid
+                wx_mch_id = WEIXIN_MCHID,  # 微信支付商户号
+                # wx_mch_key 微信支付重要密钥，请登录微信支付商户平台，在 账户中心-API安全-设置API密钥设置
+                wx_mch_key = WEIXIN_MCHKEY,
+                # wx_notify_url 接受微信付款消息通知地址（通常比自己把支付成功信号写在js里要安全得多，推荐使用这个来接收微信支付成功通知）
+                # wx_notify_url 开发详见https://pay.weixin.qq.com/wiki/doc/api/jsapi.php?chapter=9_7
+                wx_notify_url = 'http://115.28.25.154:9090/recv_notify',
+            )
+            data = wxpay.app_pay_api(
+                out_trade_no = trade_no,
+                body = u'测试订单',  # 例如：饭卡充值100元
+                total_fee = 1,  # total_fee 单位是 分
+                #total_fee = int(float(params['money'])*100),  # total_fee 单位是 分
+                spbill_create_ip = '115.28.25.154'
+            )
+
+            results['orderinfo'] = data
+
+        print results['orderinfo']
         ret['results'] = results
 
     except:
@@ -1160,13 +1214,13 @@ def index():
     return ret
 
 
-@route('/bindweixin', method='POST')
+@route('/bindpayaccount', method='POST')
 def index():
     ret = {}
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['tel', 'weixin']
+    args = ['tel', 'paytype', 'payaccount']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
