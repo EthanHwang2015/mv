@@ -12,7 +12,6 @@ import os
 import ConfigParser
 import hashlib
 import traceback
-import json
 sys.path.append('/home/work/tools/libs')
 from mongolib import Mongo
 from esindex import ESIndex
@@ -345,7 +344,6 @@ def index():
         es = ESIndex('127.0.0.1:9200', '20170107', 'mv')
         es_ret = es.Index(params['task_id'], params)
         print es_ret
-
     except TransportError as err:
         ret['status']= err.status_code
         ret['msg'] = err.error
@@ -887,6 +885,7 @@ def index():
         if mongo_ret.count() > 0:
             money = mongo_ret[0]
             ret['results'] = {'money':money}
+        print 'mongo_ret.count() = %d' % mongo_ret.count()
     except:
         ret['status'] = -1
         ret['msg'] = 'write db failed'
@@ -897,6 +896,17 @@ def index():
 
 sys.path.append('/home/work/tools/alipay')
 sys.path.append('/home/work/tools/wxpay')
+
+#支付宝相关ID
+ALIPAY_APPID = '2017042106858692'
+
+# 微信相关ID
+WEIXIN_APPID = 'wxc1779180c0ad0f29'
+WEIXIN_MCHID = '1483540042'
+WEIXIN_MCHKEY = 'SY502489E90A00D2B6F9A783CAF332CC'
+
+# 通知回调地址
+NOTIFY_URL = 'http://115.28.25.154:9090/recv_notify'
 
 #trade 
 @route('/pay_task', method='POST')
@@ -940,22 +950,15 @@ def index():
         elif "1" == pay_type:
             from alipay import AliPay
 
-            #支付宝appid 2017042106858692
-            ALIPAY_APPID = '2017042106858692'
             alipay = AliPay(
                 appid = ALIPAY_APPID,
-                app_notify_url = 'http://115.28.25.154:9090/recv_notify',
+                app_notify_url = NOTIFY_URL,
                 app_private_key_path = '/home/work/webserver/app_private_key.pem',
                 alipay_public_key_path = "",  # alipay public key file path, do not put your public key file here
                 sign_type = "RSA2", # RSA or RSA2
-                debug = True # False by default
+                #debug = True # False by default
             )
             subject = u"测试订单".encode("utf8")
-            #order_string = alipay.api_alipay_trade_app_pay(
-            #    out_trade_no = trade_no,
-            #    total_amount = '%.2f'%float(params['money']),
-            #    subject = trade_no
-            #)
             order_string = alipay.api_alipay_trade_app_pay(
                 out_trade_no = trade_no,
                 total_amount = "0.01",
@@ -965,31 +968,17 @@ def index():
 
         # 微信
         elif "2" == pay_type:
-            #from wechat_sdk import WechatConf
-            #from wechat_sdk import WechatBasic
-            #微信appid wxc1779180c0ad0f29
             from wx_pay import WxPay, WxPayError
 
-            WEIXIN_APPID = 'wxc1779180c0ad0f29'
-            WEIXIN_MCHID = '1483540042'
-            WEIXIN_MCHKEY = 'SY502489E90A00D2B6F9A783CAF332CC'
-            #conf = WechatConf(
-            #    token = 'your_token',
-            #    appid = WEIXIN_APPID,
-            #    appsecret = WEIXIN_APPSECRET,
-            #    encrypt_mode = 'safe',# 可选项：normal/compatible/safe，分别对应于：明文/兼容/安全模式
-            #    encoding_aes_key = 'your_encoding_aes_key'  # 如果传入此值则必须保证同时传入 token, appid
-            #)
-            #wechat = WechatBasic(conf=conf)
             wxpay = WxPay(
                 wx_app_id = WEIXIN_APPID,  # 微信平台appid
                 wx_mch_id = WEIXIN_MCHID,  # 微信支付商户号
                 # wx_mch_key 微信支付重要密钥，请登录微信支付商户平台，在 账户中心-API安全-设置API密钥设置
                 wx_mch_key = WEIXIN_MCHKEY,
-                # wx_notify_url 接受微信付款消息通知地址（通常比自己把支付成功信号写在js里要安全得多，推荐使用这个来接收微信支付成功通知）
                 # wx_notify_url 开发详见https://pay.weixin.qq.com/wiki/doc/api/jsapi.php?chapter=9_7
-                wx_notify_url = 'http://115.28.25.154:9090/recv_notify',
+                wx_notify_url = NOTIFY_URL,
             )
+
             data = wxpay.app_pay_api(
                 out_trade_no = trade_no,
                 body = u'测试订单',  # 例如：饭卡充值100元
@@ -997,7 +986,6 @@ def index():
                 #total_fee = int(float(params['money'])*100),  # total_fee 单位是 分
                 spbill_create_ip = '115.28.25.154'
             )
-
             results['orderinfo'] = data
 
         print results['orderinfo']
@@ -1009,7 +997,96 @@ def index():
         ret.pop('results', None)
         print traceback.format_exc()
     return ret
- 
+
+
+# 提现
+@route('/withdraw', method='POST')
+def index():
+    ret = {}
+    ret['status'] = 0
+    ret['msg'] = 'ok'
+
+    #drawtype:1=支付宝, 2＝微信
+    args = ['userid', 'drawtype', 'wxopenid', 'alipayid', 'money']
+    va = VerifyArgsPost(request, args)
+    if va is not None:
+        return va
+
+    params = GetArgsPost(request, args)
+    try:
+        userid = params['userid']
+        drawtype = params['drawtype']
+        wxopenid = params['wxopenid']
+        alipayid = params['alipayid']
+        money = params['money']
+
+        create_tm = time.time()
+        md = md5.new()
+        md.update('{}_{}_{}'.format(userid, alipayid, create_tm))
+        trade_no = md.hexdigest()
+
+        key = {'userid':params['userid'], '_id':params['userid']}
+        value = {"$set": params}
+        mongo = Mongo(db='mv', host='127.0.0.1', table='withdraw')
+
+        results = {}
+
+        # 提现到支付宝
+        if "1" == drawtype:
+            from alipay import AliPay
+
+            alipay = AliPay(
+                appid = ALIPAY_APPID,
+                app_notify_url = NOTIFY_URL,
+                app_private_key_path = '/home/work/webserver/app_private_key.pem',
+                alipay_public_key_path = "",  # alipay public key file path, do not put your public key file here
+                sign_type = "RSA2", # RSA or RSA2
+                #debug = True # False by default
+            )
+            #subject = u"测试订单".encode("utf8")
+            order_string = alipay.api_alipay_fund_trans_toaccount_transfer(
+                out_biz_no = trade_no,
+                payee_account = alipayid,
+                amount = "0.2" # amount = int(float(params['money'])*100),  # amount单位是分
+            )
+            print 'api_alipay_fund_trans_toaccount_transfer:', order_string
+            results['orderinfo'] = order_string
+
+        # 提现到微信
+        if "2" == drawtype:
+            from wx_pay import WxPay, WxPayError
+
+            wxpay = WxPay(
+                wx_app_id = WEIXIN_APPID,  # 微信平台appid
+                wx_mch_id = WEIXIN_MCHID,  # 微信支付商户号
+                # wx_mch_key 微信支付重要密钥，请登录微信支付商户平台，在 账户中心-API安全-设置API密钥设置
+                wx_mch_key = WEIXIN_MCHKEY,
+                # wx_notify_url 开发详见https://pay.weixin.qq.com/wiki/doc/api/jsapi.php?chapter=9_7
+                wx_notify_url = NOTIFY_URL,
+            )
+            data = wxpay.enterprise_payment(
+                # api_cert_path: 微信支付商户证书（apiclient_cert.pem）的本地保存路径
+                api_cert_path='/home/work/webserver/wxcert/apiclient_cert.pem',
+                # api_key_path: 微信支付商户证书（apiclient_key.pem）的本地保存路径
+                api_key_path='/home/work/webserver/wxcert/apiclient_key.pem',
+                openid = wxopenid,  # 要接收转账的用户openid
+                check_name = False,    # 是否强制校验收款用户姓名
+                # 如果check_name为True，下面re_user_name必须传入
+                # 如果check_name为False，请删除下一行参数re_user_name
+                # re_user_name = u'***客户的真实姓名***',  # 校验不成功付款会是失败
+                amount = 100,  # amount 单位是 分， 100 = 1元, 单用户 单笔上限／当日上限：2W／2W
+                desc = u'充值失败退款', # 付款原因
+                spbill_create_ip = '115.28.25.154'
+            )
+            results['orderinfo'] = data
+
+    except:
+        ret['status'] = -1
+        ret['msg'] = 'write db failed'
+        ret.pop('results', None)
+        print traceback.format_exc()
+    return ret
+
 
 @route('/trade_history', method='POST')
 def index():
@@ -1033,7 +1110,6 @@ def index():
 
     return ret
  
-
 
 @route('/search_task_count', method='POST')
 def index():
@@ -1159,11 +1235,25 @@ def index():
 #user login
 """
 
-def send_idf(phone, idf, tm='15'):
+def send_idf(phone, idf, smstype, tm='15'):
     appid = 1400023423
     appkey = "0d5efc34640b340899eb8205c65f6e6c"    
     phone_number = "18611063680"
-    templ_id = 9697
+
+    if '0' == smstype:#0：注册
+        templ_id = 9697
+    elif '1' == smstype:#1：登录
+        templ_id = 9697
+    elif '2' == smstype:#2：修改密码（忘记密码）
+        templ_id = 9697
+    elif '3' == smstype:#3：身份验证
+        templ_id = 9697
+    elif '4' == smstype:#4：注册邀请
+        templ_id = 9697
+    elif '5' == smstype:#5：支付
+        templ_id = 9697
+    else:
+        templ_id = 9697
 
     single_sender = SmsSender.SmsSingleSender(appid, appkey)
 
@@ -1204,12 +1294,7 @@ def index():
 
     #ret['results'] = {'idfcode':idfcode}
     if ret['status'] == 0:
-        if '1' == smstype:
-            print 'smstype is 1'
-        else:
-            print 'smstype is not 1'
-
-        rsp = send_idf(params['tel'], str(idfcode))
+        rsp = send_idf(params['tel'], str(idfcode), smstype)
         print rsp
     return ret
 
@@ -1220,7 +1305,7 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    args = ['tel', 'paytype', 'payaccount']
+    args = ['tel', 'paytype', 'openid']
     va = VerifyArgsPost(request, args)
     if va is not None:
         return va
@@ -1360,12 +1445,12 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    verify_args = ['userid', 'name', 'gender', 'nation', 'address', 'sinature']
+    verify_args = ['userid', 'name', 'gender', 'address', 'vocation', 'company', 'profession']
     va = VerifyArgsPost(request, verify_args)
     if va is not None:
         return va
 
-    args = ['userid', 'name', 'gender', 'nation', 'address', 'sinature']
+    args = ['userid', 'name', 'gender', 'address', 'vocation', 'company', 'profession']
     params = GetArgsPost(request, args)
 
     try:
@@ -1392,14 +1477,14 @@ def index():
     ret['status'] = 0
     ret['msg'] = 'ok'
 
-    #verify_args = ['userid', 'user_name', 'skill', 'card', 'identity_type', 'identity_id', 'icon', 'wallpaper']
-    verify_args = ['userid', 'user_name', 'skill', 'card', 'identity_type', 'identity_id']
+    #verify_args = ['userid', 'user_name', 'card', 'identity_type', 'identity_id', 'icon', 'wallpaper']
+    verify_args = ['userid', 'user_name', 'card', 'identity_type', 'identity_id']
     va = VerifyArgsPost(request, verify_args)
     if va is not None:
         return va
 
-    #args = ['userid', 'user_name', 'skill', 'card', 'identity_type', 'identity_id', 'icon']
-    args = ['userid', 'user_name', 'skill', 'card', 'identity_type', 'identity_id', 'icon', 'wallpaper']
+    #args = ['userid', 'user_name', 'card', 'identity_type', 'identity_id', 'icon']
+    args = ['userid', 'user_name', 'card', 'identity_type', 'identity_id', 'icon', 'wallpaper']
     params = GetArgsPost(request, args)
 
     try:
